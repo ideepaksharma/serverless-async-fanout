@@ -1,0 +1,110 @@
+service: serverless-async-fanout
+
+provider:
+  name: aws
+  runtime: nodejs18.x
+  region: eu-central-1
+  iam:
+    role:
+      statements:
+        - Effect: Allow
+          Action:
+            - sns:Publish
+            - sqs:SendMessage
+            - sqs:ReceiveMessage
+            - sqs:DeleteMessage
+          Resource:
+            - !Ref NotificationTopic
+            - !GetAtt ProcessingQueueOne.Arn
+            - !GetAtt ProcessingQueueTwo.Arn
+
+functions:
+  trigger:
+    handler: src/trigger.handler
+    events:
+      - http:
+          path: /trigger
+          method: post
+    environment:
+      SNS_TOPIC_ARN: !Ref NotificationTopic
+
+  processorOne:
+    handler: src/processorOne.handler
+    events:
+      - sqs:
+          arn: !GetAtt ProcessingQueueOne.Arn
+          batchSize: 1
+
+  processorTwo:
+    handler: src/processorTwo.handler
+    events:
+      - sqs:
+          arn: !GetAtt ProcessingQueueTwo.Arn
+          batchSize: 1
+
+resources:
+  Resources:
+    NotificationTopic:
+      Type: AWS::SNS::Topic
+      Properties:
+        TopicName: ${self:service}-notification-topic
+
+    ProcessingQueueOne:
+      Type: AWS::SQS::Queue
+      Properties:
+        QueueName: ${self:service}-processing-queue-one
+        VisibilityTimeout: 60
+
+    ProcessingQueueTwo:
+      Type: AWS::SQS::Queue
+      Properties:
+        QueueName: ${self:service}-processing-queue-two
+        VisibilityTimeout: 60
+
+    QueueOnePolicy:
+      Type: AWS::SQS::QueuePolicy
+      Properties:
+        Queues:
+          - !Ref ProcessingQueueOne
+        PolicyDocument:
+          Version: "2012-10-17"
+          Statement:
+            - Effect: Allow
+              Principal:
+                Service: sns.amazonaws.com
+              Action: sqs:SendMessage
+              Resource: !GetAtt ProcessingQueueOne.Arn
+              Condition:
+                ArnEquals:
+                  aws:SourceArn: !Ref NotificationTopic
+
+    QueueTwoPolicy:
+      Type: AWS::SQS::QueuePolicy
+      Properties:
+        Queues:
+          - !Ref ProcessingQueueTwo
+        PolicyDocument:
+          Version: "2012-10-17"
+          Statement:
+            - Effect: Allow
+              Principal:
+                Service: sns.amazonaws.com
+              Action: sqs:SendMessage
+              Resource: !GetAtt ProcessingQueueTwo.Arn
+              Condition:
+                ArnEquals:
+                  aws:SourceArn: !Ref NotificationTopic
+
+    NotificationTopicSubscriptionOne:
+      Type: AWS::SNS::Subscription
+      Properties:
+        TopicArn: !Ref NotificationTopic
+        Protocol: sqs
+        Endpoint: !GetAtt ProcessingQueueOne.Arn
+
+    NotificationTopicSubscriptionTwo:
+      Type: AWS::SNS::Subscription
+      Properties:
+        TopicArn: !Ref NotificationTopic
+        Protocol: sqs
+        Endpoint: !GetAtt ProcessingQueueTwo.Arn
